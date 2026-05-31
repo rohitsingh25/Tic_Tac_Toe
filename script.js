@@ -53,18 +53,16 @@ function checkWinner(currentBoard) {
 /**
  * Gets a unique cache key for the board state
  */
-function getCacheKey(currentBoard, isUserTurn, mode) {
-  return currentBoard.map(c => c === null ? '.' : c).join('') + '|' + isUserTurn + '|' + mode;
+function getCacheKey(currentBoard, isUserTurn) {
+  return currentBoard.map(c => c === null ? '.' : c).join('') + '|' + isUserTurn;
 }
 
 /**
  * Solves the game tree recursively to determine exact probabilities of user winning, drawing, or losing.
- * Assumes the user plays optimally (maximizing expected win, then draw).
- * Normal Mode: Bot plays randomly.
- * Master Mode: Bot plays optimally (minimizing user's expected win/draw).
+ * Assumes BOTH players (User and Bot) play randomly from this state onwards.
  */
-function solveProbabilities(currentBoard, isUserTurn, mode) {
-  const key = getCacheKey(currentBoard, isUserTurn, mode);
+function solveProbabilities(currentBoard, isUserTurn) {
+  const key = getCacheKey(currentBoard, isUserTurn);
   
   if (probabilityCache[key] !== undefined) {
     return probabilityCache[key];
@@ -86,73 +84,29 @@ function solveProbabilities(currentBoard, isUserTurn, mode) {
     if (currentBoard[i] === null) emptyIndices.push(i);
   }
 
-  if (isUserTurn) {
-    // User's Turn: User chooses the move that maximizes utility (Win first, then Draw).
-    let bestUtility = -Infinity;
-    let bestProbs = { win: 0, draw: 0, loss: 1 };
+  let sumWin = 0;
+  let sumDraw = 0;
+  let sumLoss = 0;
+  const nextMark = isUserTurn ? 'X' : 'O';
 
-    for (const idx of emptyIndices) {
-      const nextBoard = [...currentBoard];
-      nextBoard[idx] = 'X';
-      const probs = solveProbabilities(nextBoard, false, mode);
-      
-      // Utility formula: Win is heavily weighted, Draw is a secondary benefit
-      const utility = probs.win * 1000 + probs.draw;
-      if (utility > bestUtility) {
-        bestUtility = utility;
-        bestProbs = probs;
-      }
-    }
-
-    probabilityCache[key] = bestProbs;
-    return bestProbs;
-  } else {
-    // Bot's Turn
-    if (mode === 'master') {
-      // Master Bot: Plays optimally to minimize User utility (maximize Bot win, then Bot draw).
-      let worstUserUtility = Infinity;
-      let bestProbsForBot = { win: 1, draw: 0, loss: 0 };
-
-      for (const idx of emptyIndices) {
-        const nextBoard = [...currentBoard];
-        nextBoard[idx] = 'O';
-        const probs = solveProbabilities(nextBoard, true, mode);
-        
-        const userUtility = probs.win * 1000 + probs.draw;
-        if (userUtility < worstUserUtility) {
-          worstUserUtility = userUtility;
-          bestProbsForBot = probs;
-        }
-      }
-
-      probabilityCache[key] = bestProbsForBot;
-      return bestProbsForBot;
-    } else {
-      // Normal Bot: Plays randomly among empty squares.
-      let sumWin = 0;
-      let sumDraw = 0;
-      let sumLoss = 0;
-
-      for (const idx of emptyIndices) {
-        const nextBoard = [...currentBoard];
-        nextBoard[idx] = 'O';
-        const probs = solveProbabilities(nextBoard, true, mode);
-        sumWin += probs.win;
-        sumDraw += probs.draw;
-        sumLoss += probs.loss;
-      }
-
-      const totalCount = emptyIndices.length;
-      const avgProbs = {
-        win: sumWin / totalCount,
-        draw: sumDraw / totalCount,
-        loss: sumLoss / totalCount
-      };
-
-      probabilityCache[key] = avgProbs;
-      return avgProbs;
-    }
+  for (const idx of emptyIndices) {
+    const nextBoard = [...currentBoard];
+    nextBoard[idx] = nextMark;
+    const probs = solveProbabilities(nextBoard, !isUserTurn);
+    sumWin += probs.win;
+    sumDraw += probs.draw;
+    sumLoss += probs.loss;
   }
+
+  const totalCount = emptyIndices.length;
+  const avgProbs = {
+    win: sumWin / totalCount,
+    draw: sumDraw / totalCount,
+    loss: sumLoss / totalCount
+  };
+
+  probabilityCache[key] = avgProbs;
+  return avgProbs;
 }
 
 /**
@@ -160,7 +114,7 @@ function solveProbabilities(currentBoard, isUserTurn, mode) {
  */
 function updateProbabilityDashboard() {
   const isUserTurn = (currentPlayer === 'X');
-  const probs = solveProbabilities(board, isUserTurn, botMode);
+  const probs = solveProbabilities(board, isUserTurn);
   
   // Format percentage
   const winPercent = Math.round(probs.win * 100);
@@ -251,6 +205,42 @@ function updateStatusMessage() {
   }
 }
 
+/**
+ * Evaluates the board state using Minimax to find the best move for Master Bot.
+ * Returns a score: positive if O wins, negative if X wins, 0 for draw.
+ */
+function getMinimaxScore(currentBoard, depth, isBotTurn) {
+  const winner = checkWinner(currentBoard);
+  if (winner === 'O') return 10 - depth; // Bot wins (prefer faster wins)
+  if (winner === 'X') return depth - 10; // User wins (prefer slower losses)
+  if (winner === 'draw') return 0;
+
+  const emptyIndices = [];
+  for (let i = 0; i < 9; i++) {
+    if (currentBoard[i] === null) emptyIndices.push(i);
+  }
+
+  if (isBotTurn) {
+    let bestVal = -Infinity;
+    for (const idx of emptyIndices) {
+      const nextBoard = [...currentBoard];
+      nextBoard[idx] = 'O';
+      const val = getMinimaxScore(nextBoard, depth + 1, false);
+      bestVal = Math.max(bestVal, val);
+    }
+    return bestVal;
+  } else {
+    let bestVal = Infinity;
+    for (const idx of emptyIndices) {
+      const nextBoard = [...currentBoard];
+      nextBoard[idx] = 'X';
+      const val = getMinimaxScore(nextBoard, depth + 1, true);
+      bestVal = Math.min(bestVal, val);
+    }
+    return bestVal;
+  }
+}
+
 /* --- BOT MOVE GENERATION --- */
 
 function makeBotMove() {
@@ -267,22 +257,19 @@ function makeBotMove() {
 
   if (botMode === 'master') {
     // Master Mode: Play Minimax-optimal move.
-    // Minimizes the User's expected utility.
-    let worstUserUtility = Infinity;
+    let bestVal = -Infinity;
     let bestMoves = [];
 
     for (const idx of emptyIndices) {
       const nextBoard = [...board];
       nextBoard[idx] = 'O';
       
-      // Calculate probabilities assuming next turn is User's
-      const probs = solveProbabilities(nextBoard, true, 'master');
-      const userUtility = probs.win * 1000 + probs.draw;
+      const val = getMinimaxScore(nextBoard, 0, false);
       
-      if (userUtility < worstUserUtility) {
-        worstUserUtility = userUtility;
+      if (val > bestVal) {
+        bestVal = val;
         bestMoves = [idx];
-      } else if (userUtility === worstUserUtility) {
+      } else if (val === bestVal) {
         bestMoves.push(idx);
       }
     }
@@ -359,22 +346,27 @@ function triggerHint() {
 
   if (emptyIndices.length === 0) return;
 
-  let bestUtility = -Infinity;
   let bestMoves = [];
+  let bestProbs = { win: -1, draw: -1 };
 
   for (const idx of emptyIndices) {
     const nextBoard = [...board];
     nextBoard[idx] = 'X';
     
     // Solve with next turn as Bot's turn
-    const probs = solveProbabilities(nextBoard, false, botMode);
-    const utility = probs.win * 1000 + probs.draw;
+    const probs = solveProbabilities(nextBoard, false);
     
-    if (utility > bestUtility) {
-      bestUtility = utility;
+    // Compare lexicographically: first by win probability, then by draw probability
+    if (probs.win > bestProbs.win) {
+      bestProbs = probs;
       bestMoves = [idx];
-    } else if (utility === bestUtility) {
-      bestMoves.push(idx);
+    } else if (probs.win === bestProbs.win) {
+      if (probs.draw > bestProbs.draw) {
+        bestProbs = probs;
+        bestMoves = [idx];
+      } else if (probs.draw === bestProbs.draw) {
+        bestMoves.push(idx);
+      }
     }
   }
 
@@ -453,18 +445,8 @@ function setGameMode(mode) {
     btnModeNormal.setAttribute('aria-pressed', 'false');
   }
 
-  // Recalculate probabilities for current board state under the new mode
-  updateProbabilityDashboard();
-  
-  // Clear any active glows since the hint calculations might have changed
-  clearHintGlow();
-
-  // If it's O's turn and no move is scheduled, schedule it
-  if (currentPlayer === 'O' && !botTimeoutId && gameActive) {
-    botTimeoutId = setTimeout(() => {
-      makeBotMove();
-    }, 600);
-  }
+  // Automatically restart the game when switching modes
+  initGame();
 }
 
 /* --- EVENT LISTENERS --- */
