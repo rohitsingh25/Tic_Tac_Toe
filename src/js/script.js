@@ -1,3 +1,153 @@
+// Web Audio API Sound Engine
+const GameAudio = {
+  ctx: null,
+  masterVolume: 0.15,
+
+  init() {
+    if (this.ctx) return;
+    const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+    if (AudioContextClass) {
+      this.ctx = new AudioContextClass();
+    }
+  },
+
+  async resume() {
+    this.init();
+    if (this.ctx && this.ctx.state === 'suspended') {
+      try {
+        await this.ctx.resume();
+      } catch (err) {
+        console.warn("Failed to resume AudioContext:", err);
+      }
+    }
+  },
+
+  playTone(freqs, durations, type = 'sine', slideTo = null, filterFreq = null) {
+    this.resume().catch(() => {});
+    if (!this.ctx) return;
+
+    const now = this.ctx.currentTime;
+    
+    // Create nodes
+    const osc = this.ctx.createOscillator();
+    const gain = this.ctx.createGain();
+    let lastNode = osc;
+
+    if (filterFreq) {
+      const filter = this.ctx.createBiquadFilter();
+      filter.type = 'lowpass';
+      filter.frequency.setValueAtTime(filterFreq, now);
+      lastNode.connect(filter);
+      lastNode = filter;
+    }
+
+    lastNode.connect(gain);
+    gain.connect(this.ctx.destination);
+
+    // Set oscillator properties
+    osc.type = type;
+    osc.frequency.setValueAtTime(freqs[0], now);
+
+    // Frequency slide
+    if (slideTo && slideTo.length > 0) {
+      slideTo.forEach(s => {
+        osc.frequency.exponentialRampToValueAtTime(s.value, now + s.time);
+      });
+    }
+
+    // Gain envelope
+    gain.gain.setValueAtTime(0, now);
+    let cumulativeTime = 0;
+    durations.forEach((d) => {
+      const start = now + cumulativeTime;
+      const attack = 0.005;
+      
+      gain.gain.linearRampToValueAtTime(this.masterVolume, start + attack);
+      gain.gain.exponentialRampToValueAtTime(0.0001, start + d);
+      
+      cumulativeTime += d;
+    });
+
+    // Start & Stop
+    osc.start(now);
+    osc.stop(now + cumulativeTime);
+  },
+
+  playUserMove() {
+    this.playTone([600], [0.08], 'sine', [{ value: 900, time: 0.08 }], 1500);
+  },
+
+  playBotMove() {
+    this.playTone([350], [0.12], 'triangle', [{ value: 200, time: 0.12 }], 800);
+  },
+
+  playHint() {
+    this.resume().catch(() => {});
+    if (!this.ctx) return;
+    
+    const notes = [523.25, 659.25, 783.99, 1046.50]; // C5, E5, G5, C6
+    const delay = 0.07;
+    const duration = 0.25;
+    
+    notes.forEach((freq, idx) => {
+      setTimeout(() => {
+        this.playTone([freq], [duration], 'sine', null, 1200);
+      }, idx * delay * 1000);
+    });
+  },
+
+  playWin() {
+    this.resume().catch(() => {});
+    if (!this.ctx) return;
+
+    const melody = [
+      { freq: 659.25, delay: 0, dur: 0.12 },
+      { freq: 783.99, delay: 0.12, dur: 0.12 },
+      { freq: 1318.51, delay: 0.24, dur: 0.18 },
+      { freq: 1046.50, delay: 0.42, dur: 0.18 },
+      { freq: 1174.66, delay: 0.60, dur: 0.18 },
+      { freq: 1567.98, delay: 0.78, dur: 0.45 }
+    ];
+
+    melody.forEach(note => {
+      setTimeout(() => {
+        this.playTone([note.freq], [note.dur], 'triangle', null, 2500);
+      }, note.delay * 1000);
+    });
+  },
+
+  playLoss() {
+    this.resume().catch(() => {});
+    if (!this.ctx) return;
+
+    const melody = [
+      { freq: 233.08, delay: 0, dur: 0.22 },
+      { freq: 207.65, delay: 0.22, dur: 0.22 },
+      { freq: 185.00, delay: 0.44, dur: 0.22 },
+      { freq: 174.61, delay: 0.66, dur: 0.55, slideTo: 110 }
+    ];
+
+    melody.forEach(note => {
+      setTimeout(() => {
+        const slide = note.slideTo ? [{ value: note.slideTo, time: note.dur }] : null;
+        this.playTone([note.freq], [note.dur], 'sawtooth', slide, 800);
+      }, note.delay * 1000);
+    });
+  },
+
+  playDraw() {
+    this.resume().catch(() => {});
+    if (!this.ctx) return;
+
+    setTimeout(() => {
+      this.playTone([392.00], [0.15], 'sine', null, 1000);
+    }, 0);
+    setTimeout(() => {
+      this.playTone([293.66], [0.3], 'sine', null, 1000);
+    }, 150);
+  }
+};
+
 // Game State Configurations
 const WINNING_COMBOS = [
   [0, 1, 2], [3, 4, 5], [6, 7, 8], // Rows
@@ -302,6 +452,7 @@ function updateStatusMessage() {
   
   const winner = checkWinner(board);
   if (winner) {
+    const wasActive = gameActive;
     gameActive = false;
     clearHintGlow();
     btnHint.disabled = true;
@@ -309,12 +460,15 @@ function updateStatusMessage() {
     if (winner === 'X') {
       statusMessage.innerHTML = '🎉 <span style="color: var(--color-green)">You Won!</span> Excellent play.';
       statusCard.classList.add('user-win');
+      if (wasActive) GameAudio.playWin();
     } else if (winner === 'O') {
       statusMessage.innerHTML = '🤖 <span style="color: var(--color-magenta)">Bot Won!</span> Try again.';
       statusCard.classList.add('bot-win');
+      if (wasActive) GameAudio.playLoss();
     } else {
       statusMessage.innerHTML = '🤝 <span style="color: var(--color-orange)">It\'s a Draw!</span> Good game.';
       statusCard.classList.add('draw-game');
+      if (wasActive) GameAudio.playDraw();
     }
     return;
   }
@@ -411,6 +565,9 @@ function makeBotMove() {
   cell.disabled = true;
   cell.setAttribute('aria-label', `Square ${targetIndex + 1}, Played O`);
 
+  // Play Bot Move sound
+  GameAudio.playBotMove();
+
   // Switch Turn
   currentPlayer = 'X';
   updateStatusMessage();
@@ -434,6 +591,9 @@ function handleCellClick(e) {
   cell.appendChild(createMarkSvg('X'));
   cell.disabled = true;
   cell.setAttribute('aria-label', `Square ${index + 1}, Played X`);
+
+  // Play User Move sound
+  GameAudio.playUserMove();
 
   // Check Game State
   const winner = checkWinner(board);
@@ -461,6 +621,9 @@ function triggerHint() {
 
   // Clear existing glows
   clearHintGlow();
+
+  // Play Hint sound
+  GameAudio.playHint();
 
   const emptyIndices = [];
   for (let i = 0; i < 9; i++) {
@@ -576,13 +739,28 @@ function setGameMode(mode) {
 /* --- EVENT LISTENERS --- */
 
 cells.forEach(cell => {
-  cell.addEventListener('click', handleCellClick);
+  cell.addEventListener('click', (e) => {
+    GameAudio.resume();
+    handleCellClick(e);
+  });
 });
 
-btnModeNormal.addEventListener('click', () => setGameMode('normal'));
-btnModeMaster.addEventListener('click', () => setGameMode('master'));
-btnHint.addEventListener('click', triggerHint);
-btnRestart.addEventListener('click', initGame);
+btnModeNormal.addEventListener('click', () => {
+  GameAudio.resume();
+  setGameMode('normal');
+});
+btnModeMaster.addEventListener('click', () => {
+  GameAudio.resume();
+  setGameMode('master');
+});
+btnHint.addEventListener('click', () => {
+  GameAudio.resume();
+  triggerHint();
+});
+btnRestart.addEventListener('click', () => {
+  GameAudio.resume();
+  initGame();
+});
 
 // Run initialization on load
 window.addEventListener('DOMContentLoaded', () => {
