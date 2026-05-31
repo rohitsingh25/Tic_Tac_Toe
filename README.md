@@ -1,5 +1,7 @@
 # Neon Tic-Tac-Toe
 
+**Live Demo**: [neontictac.vercel.app](https://neontictac.vercel.app/)
+
 A premium, highly responsive, glassmorphic Tic-Tac-Toe single-page application. Features real-time win, draw, and loss probability calculations, a minimax AI hint engine, and dual-difficulty bot configurations.
 
 ---
@@ -25,9 +27,12 @@ A premium, highly responsive, glassmorphic Tic-Tac-Toe single-page application. 
 ```
 ├── .gitignore         # Files ignored by Git
 ├── host.md            # Detailed deployment instructions for Vercel/Render
-├── index.html         # Application markup
-├── script.js          # Game mechanics, solver engine, and AI logic
-├── style.css          # Styling, glassmorphic tokens, and animations
+├── index.html         # Application entry point (markup)
+├── src/               # Source directory
+│   ├── css/
+│   │   └── style.css  # Styling, glassmorphic tokens, and animations
+│   └── js/
+│       └── script.js  # Game mechanics, solver engine, and AI logic
 └── README.md          # Project documentation (this file)
 ```
 
@@ -59,3 +64,7 @@ You can also simply open the `index.html` file in any modern web browser by doub
 ## Deployment & Hosting
 
 Detailed step-by-step instructions for deploying to GitHub and hosting on **Vercel** and **Render** are available in the [host.md](host.md) file.
+
+---
+
+Developed with ❤️ by **Rohit Singh Yadav**
