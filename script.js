@@ -14,6 +14,7 @@ let botTimeoutId = null;
 
 // Probability Memoization Cache
 const probabilityCache = {};
+const optimalCache = {};
 
 // DOM Elements
 const cells = document.querySelectorAll('.cell');
@@ -107,6 +108,108 @@ function solveProbabilities(currentBoard, isUserTurn) {
 
   probabilityCache[key] = avgProbs;
   return avgProbs;
+}
+
+/**
+ * Gets a unique cache key for the optimal solver
+ */
+function getOptimalCacheKey(currentBoard, isUserTurn, mode) {
+  return currentBoard.map(c => c === null ? '.' : c).join('') + '|' + isUserTurn + '|' + mode;
+}
+
+/**
+ * Solves the game tree recursively assuming the user plays optimally,
+ * and the bot plays randomly in Normal mode, or optimally in Master mode.
+ */
+function solveOptimal(currentBoard, isUserTurn, mode) {
+  const key = getOptimalCacheKey(currentBoard, isUserTurn, mode);
+  
+  if (optimalCache[key] !== undefined) {
+    return optimalCache[key];
+  }
+
+  const winner = checkWinner(currentBoard);
+  if (winner === 'X') {
+    return { win: 1, draw: 0, loss: 0 };
+  }
+  if (winner === 'O') {
+    return { win: 0, draw: 0, loss: 1 };
+  }
+  if (winner === 'draw') {
+    return { win: 0, draw: 1, loss: 0 };
+  }
+
+  const emptyIndices = [];
+  for (let i = 0; i < 9; i++) {
+    if (currentBoard[i] === null) emptyIndices.push(i);
+  }
+
+  if (isUserTurn) {
+    // User plays optimally: maximizes user utility (Win first, then Draw)
+    let bestUtility = -Infinity;
+    let bestProbs = { win: 0, draw: 0, loss: 1 };
+
+    for (const idx of emptyIndices) {
+      const nextBoard = [...currentBoard];
+      nextBoard[idx] = 'X';
+      const probs = solveOptimal(nextBoard, false, mode);
+      
+      const utility = probs.win * 1000 + probs.draw;
+      if (utility > bestUtility) {
+        bestUtility = utility;
+        bestProbs = probs;
+      }
+    }
+
+    optimalCache[key] = bestProbs;
+    return bestProbs;
+  } else {
+    // Bot's Turn
+    if (mode === 'master') {
+      // Master Bot: plays optimally to minimize User utility (maximize Bot win, then Bot draw)
+      let worstUserUtility = Infinity;
+      let bestProbsForBot = { win: 1, draw: 0, loss: 0 };
+
+      for (const idx of emptyIndices) {
+        const nextBoard = [...currentBoard];
+        nextBoard[idx] = 'O';
+        const probs = solveOptimal(nextBoard, true, mode);
+        
+        const userUtility = probs.win * 1000 + probs.draw;
+        if (userUtility < worstUserUtility) {
+          worstUserUtility = userUtility;
+          bestProbsForBot = probs;
+        }
+      }
+
+      optimalCache[key] = bestProbsForBot;
+      return bestProbsForBot;
+    } else {
+      // Normal Bot: plays randomly among empty squares
+      let sumWin = 0;
+      let sumDraw = 0;
+      let sumLoss = 0;
+
+      for (const idx of emptyIndices) {
+        const nextBoard = [...currentBoard];
+        nextBoard[idx] = 'O';
+        const probs = solveOptimal(nextBoard, true, mode);
+        sumWin += probs.win;
+        sumDraw += probs.draw;
+        sumLoss += probs.loss;
+      }
+
+      const totalCount = emptyIndices.length;
+      const avgProbs = {
+        win: sumWin / totalCount,
+        draw: sumDraw / totalCount,
+        loss: sumLoss / totalCount
+      };
+
+      optimalCache[key] = avgProbs;
+      return avgProbs;
+    }
+  }
 }
 
 /**
@@ -353,8 +456,8 @@ function triggerHint() {
     const nextBoard = [...board];
     nextBoard[idx] = 'X';
     
-    // Solve with next turn as Bot's turn
-    const probs = solveProbabilities(nextBoard, false);
+    // Solve with next turn as Bot's turn under optimal user play assumption
+    const probs = solveOptimal(nextBoard, false, botMode);
     
     // Compare lexicographically: first by win probability, then by draw probability
     if (probs.win > bestProbs.win) {
