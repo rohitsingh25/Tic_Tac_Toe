@@ -489,13 +489,14 @@ function triggerHint() {
     }
   }
 
-  // Highlight all optimal cells (usually one, sometimes multiple in early states)
-  bestMoves.forEach(idx => {
-    const cell = document.querySelector(`.cell[data-index="${idx}"]`);
+  // Highlight the best move square (pick one randomly among the equally best moves)
+  if (bestMoves.length > 0) {
+    const targetIdx = bestMoves[Math.floor(Math.random() * bestMoves.length)];
+    const cell = document.querySelector(`.cell[data-index="${targetIdx}"]`);
     if (cell) {
       cell.classList.add('hint-glow');
     }
-  });
+  }
 
   // Automatically clear hint glow after 3 seconds
   hintTimeoutId = setTimeout(() => {
@@ -511,6 +512,10 @@ function initGame() {
     clearTimeout(botTimeoutId);
     botTimeoutId = null;
   }
+
+  // Clear memoization caches to ensure a fresh evaluation slate
+  for (const key in probabilityCache) delete probabilityCache[key];
+  for (const key in optimalCache) delete optimalCache[key];
 
   // Reset Game States
   board = Array(9).fill(null);
