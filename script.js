@@ -1,0 +1,484 @@
+// Game State Configurations
+const WINNING_COMBOS = [
+  [0, 1, 2], [3, 4, 5], [6, 7, 8], // Rows
+  [0, 3, 6], [1, 4, 7], [2, 5, 8], // Columns
+  [0, 4, 8], [2, 4, 6]             // Diagonals
+];
+
+let board = Array(9).fill(null);
+let botMode = 'normal'; // 'normal' or 'master'
+let currentPlayer = 'X'; // 'X' is User, 'O' is Bot
+let firstPlayer = 'user'; // 'user' or 'bot'
+let gameActive = true;
+let botTimeoutId = null;
+
+// Probability Memoization Cache
+const probabilityCache = {};
+
+// DOM Elements
+const cells = document.querySelectorAll('.cell');
+const statusMessage = document.getElementById('status-message');
+const statusCard = document.getElementById('status-card');
+const firstPlayerBadge = document.getElementById('first-player-badge');
+const btnModeNormal = document.getElementById('btn-mode-normal');
+const btnModeMaster = document.getElementById('btn-mode-master');
+const btnHint = document.getElementById('btn-hint');
+const btnRestart = document.getElementById('btn-restart');
+
+// Probability Text and Bars
+const txtProbWin = document.getElementById('txt-prob-win');
+const txtProbDraw = document.getElementById('txt-prob-draw');
+const txtProbLoss = document.getElementById('txt-prob-loss');
+const barProbWin = document.getElementById('bar-prob-win');
+const barProbDraw = document.getElementById('bar-prob-draw');
+const barProbLoss = document.getElementById('bar-prob-loss');
+
+/* --- WINNER & GAME OVER CHECKS --- */
+
+function checkWinner(currentBoard) {
+  for (const combo of WINNING_COMBOS) {
+    const [a, b, c] = combo;
+    if (currentBoard[a] && currentBoard[a] === currentBoard[b] && currentBoard[a] === currentBoard[c]) {
+      return currentBoard[a]; // 'X' or 'O'
+    }
+  }
+  if (currentBoard.every(cell => cell !== null)) {
+    return 'draw';
+  }
+  return null; // Active
+}
+
+/* --- RECURSIVE PROBABILITY SOLVER --- */
+
+/**
+ * Gets a unique cache key for the board state
+ */
+function getCacheKey(currentBoard, isUserTurn, mode) {
+  return currentBoard.map(c => c === null ? '.' : c).join('') + '|' + isUserTurn + '|' + mode;
+}
+
+/**
+ * Solves the game tree recursively to determine exact probabilities of user winning, drawing, or losing.
+ * Assumes the user plays optimally (maximizing expected win, then draw).
+ * Normal Mode: Bot plays randomly.
+ * Master Mode: Bot plays optimally (minimizing user's expected win/draw).
+ */
+function solveProbabilities(currentBoard, isUserTurn, mode) {
+  const key = getCacheKey(currentBoard, isUserTurn, mode);
+  
+  if (probabilityCache[key] !== undefined) {
+    return probabilityCache[key];
+  }
+
+  const winner = checkWinner(currentBoard);
+  if (winner === 'X') {
+    return { win: 1, draw: 0, loss: 0 };
+  }
+  if (winner === 'O') {
+    return { win: 0, draw: 0, loss: 1 };
+  }
+  if (winner === 'draw') {
+    return { win: 0, draw: 1, loss: 0 };
+  }
+
+  const emptyIndices = [];
+  for (let i = 0; i < 9; i++) {
+    if (currentBoard[i] === null) emptyIndices.push(i);
+  }
+
+  if (isUserTurn) {
+    // User's Turn: User chooses the move that maximizes utility (Win first, then Draw).
+    let bestUtility = -Infinity;
+    let bestProbs = { win: 0, draw: 0, loss: 1 };
+
+    for (const idx of emptyIndices) {
+      const nextBoard = [...currentBoard];
+      nextBoard[idx] = 'X';
+      const probs = solveProbabilities(nextBoard, false, mode);
+      
+      // Utility formula: Win is heavily weighted, Draw is a secondary benefit
+      const utility = probs.win * 1000 + probs.draw;
+      if (utility > bestUtility) {
+        bestUtility = utility;
+        bestProbs = probs;
+      }
+    }
+
+    probabilityCache[key] = bestProbs;
+    return bestProbs;
+  } else {
+    // Bot's Turn
+    if (mode === 'master') {
+      // Master Bot: Plays optimally to minimize User utility (maximize Bot win, then Bot draw).
+      let worstUserUtility = Infinity;
+      let bestProbsForBot = { win: 1, draw: 0, loss: 0 };
+
+      for (const idx of emptyIndices) {
+        const nextBoard = [...currentBoard];
+        nextBoard[idx] = 'O';
+        const probs = solveProbabilities(nextBoard, true, mode);
+        
+        const userUtility = probs.win * 1000 + probs.draw;
+        if (userUtility < worstUserUtility) {
+          worstUserUtility = userUtility;
+          bestProbsForBot = probs;
+        }
+      }
+
+      probabilityCache[key] = bestProbsForBot;
+      return bestProbsForBot;
+    } else {
+      // Normal Bot: Plays randomly among empty squares.
+      let sumWin = 0;
+      let sumDraw = 0;
+      let sumLoss = 0;
+
+      for (const idx of emptyIndices) {
+        const nextBoard = [...currentBoard];
+        nextBoard[idx] = 'O';
+        const probs = solveProbabilities(nextBoard, true, mode);
+        sumWin += probs.win;
+        sumDraw += probs.draw;
+        sumLoss += probs.loss;
+      }
+
+      const totalCount = emptyIndices.length;
+      const avgProbs = {
+        win: sumWin / totalCount,
+        draw: sumDraw / totalCount,
+        loss: sumLoss / totalCount
+      };
+
+      probabilityCache[key] = avgProbs;
+      return avgProbs;
+    }
+  }
+}
+
+/**
+ * Updates the user probability metrics dashboard with visual transitions
+ */
+function updateProbabilityDashboard() {
+  const isUserTurn = (currentPlayer === 'X');
+  const probs = solveProbabilities(board, isUserTurn, botMode);
+  
+  // Format percentage
+  const winPercent = Math.round(probs.win * 100);
+  const drawPercent = Math.round(probs.draw * 100);
+  const lossPercent = Math.round(probs.loss * 100);
+
+  // Update UI values
+  txtProbWin.textContent = `${winPercent}%`;
+  txtProbDraw.textContent = `${drawPercent}%`;
+  txtProbLoss.textContent = `${lossPercent}%`;
+
+  // Update bar lengths
+  barProbWin.style.width = `${winPercent}%`;
+  barProbDraw.style.width = `${drawPercent}%`;
+  barProbLoss.style.width = `${lossPercent}%`;
+}
+
+/* --- GAME STATE & UI UPDATES --- */
+
+function createMarkSvg(type) {
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("class", "mark-svg");
+  svg.setAttribute("viewBox", "0 0 100 100");
+
+  if (type === 'X') {
+    const g = document.createElementNS("http://www.w3.org/2000/svg", "g");
+    g.setAttribute("class", "mark-x");
+    
+    const line1 = document.createElementNS("http://www.w3.org/2000/svg", "line");
+    line1.setAttribute("x1", "20");
+    line1.setAttribute("y1", "20");
+    line1.setAttribute("x2", "80");
+    line1.setAttribute("y2", "80");
+    
+    const line2 = document.createElementNS("http://www.w3.org/2000/svg", "line");
+    line2.setAttribute("x1", "80");
+    line2.setAttribute("y1", "20");
+    line2.setAttribute("x2", "20");
+    line2.setAttribute("y2", "80");
+    
+    g.appendChild(line1);
+    g.appendChild(line2);
+    svg.appendChild(g);
+  } else {
+    const circle = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+    circle.setAttribute("class", "mark-o");
+    circle.setAttribute("cx", "50");
+    circle.setAttribute("cy", "50");
+    circle.setAttribute("r", "28");
+    
+    svg.appendChild(circle);
+  }
+  return svg;
+}
+
+function clearHintGlow() {
+  cells.forEach(cell => cell.classList.remove('hint-glow'));
+}
+
+function updateStatusMessage() {
+  statusCard.className = 'status-card glass-card'; // reset classes
+  
+  const winner = checkWinner(board);
+  if (winner) {
+    gameActive = false;
+    clearHintGlow();
+    btnHint.disabled = true;
+    
+    if (winner === 'X') {
+      statusMessage.innerHTML = '🎉 <span style="color: var(--color-green)">You Won!</span> Excellent play.';
+      statusCard.classList.add('user-win');
+    } else if (winner === 'O') {
+      statusMessage.innerHTML = '🤖 <span style="color: var(--color-magenta)">Bot Won!</span> Try again.';
+      statusCard.classList.add('bot-win');
+    } else {
+      statusMessage.innerHTML = '🤝 <span style="color: var(--color-orange)">It\'s a Draw!</span> Good game.';
+      statusCard.classList.add('draw-game');
+    }
+    return;
+  }
+
+  if (currentPlayer === 'X') {
+    statusMessage.innerHTML = '👤 <span>Your Turn</span> &bull; Select a square';
+    firstPlayerBadge.textContent = firstPlayer === 'user' ? 'You Went First' : 'Bot Went First';
+  } else {
+    statusMessage.innerHTML = '🤖 <span>Bot is thinking...</span>';
+    firstPlayerBadge.textContent = firstPlayer === 'user' ? 'You Went First' : 'Bot Went First';
+  }
+}
+
+/* --- BOT MOVE GENERATION --- */
+
+function makeBotMove() {
+  if (!gameActive) return;
+
+  const emptyIndices = [];
+  for (let i = 0; i < 9; i++) {
+    if (board[i] === null) emptyIndices.push(i);
+  }
+
+  if (emptyIndices.length === 0) return;
+
+  let targetIndex;
+
+  if (botMode === 'master') {
+    // Master Mode: Play Minimax-optimal move.
+    // Minimizes the User's expected utility.
+    let worstUserUtility = Infinity;
+    let bestMoves = [];
+
+    for (const idx of emptyIndices) {
+      const nextBoard = [...board];
+      nextBoard[idx] = 'O';
+      
+      // Calculate probabilities assuming next turn is User's
+      const probs = solveProbabilities(nextBoard, true, 'master');
+      const userUtility = probs.win * 1000 + probs.draw;
+      
+      if (userUtility < worstUserUtility) {
+        worstUserUtility = userUtility;
+        bestMoves = [idx];
+      } else if (userUtility === worstUserUtility) {
+        bestMoves.push(idx);
+      }
+    }
+    
+    // Choose randomly among equally optimal moves
+    targetIndex = bestMoves[Math.floor(Math.random() * bestMoves.length)];
+  } else {
+    // Normal Mode: Play random move.
+    targetIndex = emptyIndices[Math.floor(Math.random() * emptyIndices.length)];
+  }
+
+  // Execute Move
+  board[targetIndex] = 'O';
+  const cell = document.querySelector(`.cell[data-index="${targetIndex}"]`);
+  cell.appendChild(createMarkSvg('O'));
+  cell.disabled = true;
+  cell.setAttribute('aria-label', `Square ${targetIndex + 1}, Played O`);
+
+  // Switch Turn
+  currentPlayer = 'X';
+  updateStatusMessage();
+  updateProbabilityDashboard();
+}
+
+/* --- CELL CLICK HANDLER --- */
+
+function handleCellClick(e) {
+  const cell = e.target.closest('.cell');
+  if (!cell || !gameActive || currentPlayer !== 'X') return;
+
+  const index = parseInt(cell.getAttribute('data-index'));
+  if (board[index] !== null) return;
+
+  // Clear any existing hint glows
+  clearHintGlow();
+
+  // User plays X
+  board[index] = 'X';
+  cell.appendChild(createMarkSvg('X'));
+  cell.disabled = true;
+  cell.setAttribute('aria-label', `Square ${index + 1}, Played X`);
+
+  // Check Game State
+  const winner = checkWinner(board);
+  if (winner) {
+    updateStatusMessage();
+    updateProbabilityDashboard();
+    return;
+  }
+
+  // Switch to Bot
+  currentPlayer = 'O';
+  updateStatusMessage();
+  updateProbabilityDashboard();
+
+  // Schedule Bot Move with animation delay
+  botTimeoutId = setTimeout(() => {
+    makeBotMove();
+  }, 600);
+}
+
+/* --- HINT GENERATION --- */
+
+function triggerHint() {
+  if (!gameActive || currentPlayer !== 'X') return;
+
+  // Clear existing glows
+  clearHintGlow();
+
+  const emptyIndices = [];
+  for (let i = 0; i < 9; i++) {
+    if (board[i] === null) emptyIndices.push(i);
+  }
+
+  if (emptyIndices.length === 0) return;
+
+  let bestUtility = -Infinity;
+  let bestMoves = [];
+
+  for (const idx of emptyIndices) {
+    const nextBoard = [...board];
+    nextBoard[idx] = 'X';
+    
+    // Solve with next turn as Bot's turn
+    const probs = solveProbabilities(nextBoard, false, botMode);
+    const utility = probs.win * 1000 + probs.draw;
+    
+    if (utility > bestUtility) {
+      bestUtility = utility;
+      bestMoves = [idx];
+    } else if (utility === bestUtility) {
+      bestMoves.push(idx);
+    }
+  }
+
+  // Highlight all optimal cells (usually one, sometimes multiple in early states)
+  bestMoves.forEach(idx => {
+    const cell = document.querySelector(`.cell[data-index="${idx}"]`);
+    if (cell) {
+      cell.classList.add('hint-glow');
+    }
+  });
+
+  // Automatically clear hint glow after 3 seconds
+  setTimeout(() => {
+    clearHintGlow();
+  }, 3000);
+}
+
+/* --- GAME INITIATION / RESET --- */
+
+function initGame() {
+  // Clear Timers
+  if (botTimeoutId) {
+    clearTimeout(botTimeoutId);
+    botTimeoutId = null;
+  }
+
+  // Reset Game States
+  board = Array(9).fill(null);
+  gameActive = true;
+  btnHint.disabled = false;
+  clearHintGlow();
+
+  // Reset Board Cells UI
+  cells.forEach(cell => {
+    cell.innerHTML = '';
+    cell.disabled = false;
+    const idx = cell.getAttribute('data-index');
+    cell.setAttribute('aria-label', `Square ${parseInt(idx) + 1}, Empty`);
+  });
+
+  // Randomly select First Player
+  firstPlayer = Math.random() < 0.5 ? 'user' : 'bot';
+  
+  if (firstPlayer === 'user') {
+    currentPlayer = 'X';
+    updateStatusMessage();
+    updateProbabilityDashboard();
+  } else {
+    currentPlayer = 'O';
+    updateStatusMessage();
+    updateProbabilityDashboard();
+    
+    // Schedule bot first move
+    botTimeoutId = setTimeout(() => {
+      makeBotMove();
+    }, 600);
+  }
+}
+
+/* --- CONFIGURATION CONTROLS --- */
+
+function setGameMode(mode) {
+  if (botMode === mode) return;
+  
+  botMode = mode;
+  
+  if (mode === 'normal') {
+    btnModeNormal.classList.add('active');
+    btnModeNormal.setAttribute('aria-pressed', 'true');
+    btnModeMaster.classList.remove('active');
+    btnModeMaster.setAttribute('aria-pressed', 'false');
+  } else {
+    btnModeMaster.classList.add('active');
+    btnModeMaster.setAttribute('aria-pressed', 'true');
+    btnModeNormal.classList.remove('active');
+    btnModeNormal.setAttribute('aria-pressed', 'false');
+  }
+
+  // Recalculate probabilities for current board state under the new mode
+  updateProbabilityDashboard();
+  
+  // Clear any active glows since the hint calculations might have changed
+  clearHintGlow();
+
+  // If it's O's turn and no move is scheduled, schedule it
+  if (currentPlayer === 'O' && !botTimeoutId && gameActive) {
+    botTimeoutId = setTimeout(() => {
+      makeBotMove();
+    }, 600);
+  }
+}
+
+/* --- EVENT LISTENERS --- */
+
+cells.forEach(cell => {
+  cell.addEventListener('click', handleCellClick);
+});
+
+btnModeNormal.addEventListener('click', () => setGameMode('normal'));
+btnModeMaster.addEventListener('click', () => setGameMode('master'));
+btnHint.addEventListener('click', triggerHint);
+btnRestart.addEventListener('click', initGame);
+
+// Run initialization on load
+window.addEventListener('DOMContentLoaded', () => {
+  initGame();
+});
