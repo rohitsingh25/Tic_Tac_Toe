@@ -11,6 +11,7 @@ let currentPlayer = 'X'; // 'X' is User, 'O' is Bot
 let firstPlayer = 'user'; // 'user' or 'bot'
 let gameActive = true;
 let botTimeoutId = null;
+let hintTimeoutId = null;
 
 // Probability Memoization Cache
 const probabilityCache = {};
@@ -117,6 +118,26 @@ function getOptimalCacheKey(currentBoard, isUserTurn, mode) {
   return currentBoard.map(c => c === null ? '.' : c).join('') + '|' + isUserTurn + '|' + mode;
 }
 
+const EPSILON = 1e-9;
+
+function isProbsBetterForUser(p1, p2) {
+  if (Math.abs(p1.win - p2.win) > EPSILON) {
+    return p1.win > p2.win;
+  }
+  return p1.draw > p2.draw;
+}
+
+function isProbsWorseForUser(p1, p2) {
+  if (Math.abs(p1.win - p2.win) > EPSILON) {
+    return p1.win < p2.win;
+  }
+  return p1.draw < p2.draw;
+}
+
+function isProbsEqual(p1, p2) {
+  return Math.abs(p1.win - p2.win) < EPSILON && Math.abs(p1.draw - p2.draw) < EPSILON;
+}
+
 /**
  * Solves the game tree recursively assuming the user plays optimally,
  * and the bot plays randomly in Normal mode, or optimally in Master mode.
@@ -146,17 +167,14 @@ function solveOptimal(currentBoard, isUserTurn, mode) {
 
   if (isUserTurn) {
     // User plays optimally: maximizes user utility (Win first, then Draw)
-    let bestUtility = -Infinity;
-    let bestProbs = { win: 0, draw: 0, loss: 1 };
+    let bestProbs = { win: -1, draw: -1, loss: 2 };
 
     for (const idx of emptyIndices) {
       const nextBoard = [...currentBoard];
       nextBoard[idx] = 'X';
       const probs = solveOptimal(nextBoard, false, mode);
       
-      const utility = probs.win * 1000 + probs.draw;
-      if (utility > bestUtility) {
-        bestUtility = utility;
+      if (isProbsBetterForUser(probs, bestProbs)) {
         bestProbs = probs;
       }
     }
@@ -167,23 +185,20 @@ function solveOptimal(currentBoard, isUserTurn, mode) {
     // Bot's Turn
     if (mode === 'master') {
       // Master Bot: plays optimally to minimize User utility (maximize Bot win, then Bot draw)
-      let worstUserUtility = Infinity;
-      let bestProbsForBot = { win: 1, draw: 0, loss: 0 };
+      let worstProbs = { win: 2, draw: 2, loss: -1 };
 
       for (const idx of emptyIndices) {
         const nextBoard = [...currentBoard];
         nextBoard[idx] = 'O';
         const probs = solveOptimal(nextBoard, true, mode);
         
-        const userUtility = probs.win * 1000 + probs.draw;
-        if (userUtility < worstUserUtility) {
-          worstUserUtility = userUtility;
-          bestProbsForBot = probs;
+        if (isProbsWorseForUser(probs, worstProbs)) {
+          worstProbs = probs;
         }
       }
 
-      optimalCache[key] = bestProbsForBot;
-      return bestProbsForBot;
+      optimalCache[key] = worstProbs;
+      return worstProbs;
     } else {
       // Normal Bot: plays randomly among empty squares
       let sumWin = 0;
@@ -275,6 +290,10 @@ function createMarkSvg(type) {
 
 function clearHintGlow() {
   cells.forEach(cell => cell.classList.remove('hint-glow'));
+  if (hintTimeoutId) {
+    clearTimeout(hintTimeoutId);
+    hintTimeoutId = null;
+  }
 }
 
 function updateStatusMessage() {
@@ -450,7 +469,7 @@ function triggerHint() {
   if (emptyIndices.length === 0) return;
 
   let bestMoves = [];
-  let bestProbs = { win: -1, draw: -1 };
+  let bestProbs = { win: -1, draw: -1, loss: 2 };
 
   for (const idx of emptyIndices) {
     const nextBoard = [...board];
@@ -460,16 +479,11 @@ function triggerHint() {
     const probs = solveOptimal(nextBoard, false, botMode);
     
     // Compare lexicographically: first by win probability, then by draw probability
-    if (probs.win > bestProbs.win) {
+    if (isProbsBetterForUser(probs, bestProbs)) {
       bestProbs = probs;
       bestMoves = [idx];
-    } else if (probs.win === bestProbs.win) {
-      if (probs.draw > bestProbs.draw) {
-        bestProbs = probs;
-        bestMoves = [idx];
-      } else if (probs.draw === bestProbs.draw) {
-        bestMoves.push(idx);
-      }
+    } else if (isProbsEqual(probs, bestProbs)) {
+      bestMoves.push(idx);
     }
   }
 
@@ -482,7 +496,7 @@ function triggerHint() {
   });
 
   // Automatically clear hint glow after 3 seconds
-  setTimeout(() => {
+  hintTimeoutId = setTimeout(() => {
     clearHintGlow();
   }, 3000);
 }
