@@ -114,8 +114,8 @@ function solveProbabilities(currentBoard, isUserTurn) {
 /**
  * Gets a unique cache key for the optimal solver
  */
-function getOptimalCacheKey(currentBoard, isUserTurn, mode) {
-  return currentBoard.map(c => c === null ? '.' : c).join('') + '|' + isUserTurn + '|' + mode;
+function getOptimalCacheKey(currentBoard, isUserTurn, mode, depth) {
+  return currentBoard.map(c => c === null ? '.' : c).join('') + '|' + isUserTurn + '|' + mode + '|' + depth;
 }
 
 const EPSILON = 1e-9;
@@ -141,9 +141,10 @@ function isProbsEqual(p1, p2) {
 /**
  * Solves the game tree recursively assuming the user plays optimally,
  * and the bot plays randomly in Normal mode, or optimally in Master mode.
+ * Integrates depth-discounting to favor faster wins and delay unavoidable losses.
  */
-function solveOptimal(currentBoard, isUserTurn, mode) {
-  const key = getOptimalCacheKey(currentBoard, isUserTurn, mode);
+function solveOptimal(currentBoard, isUserTurn, mode, depth = 0) {
+  const key = getOptimalCacheKey(currentBoard, isUserTurn, mode, depth);
   
   if (optimalCache[key] !== undefined) {
     return optimalCache[key];
@@ -151,10 +152,10 @@ function solveOptimal(currentBoard, isUserTurn, mode) {
 
   const winner = checkWinner(currentBoard);
   if (winner === 'X') {
-    return { win: 1, draw: 0, loss: 0 };
+    return { win: 1.0 - 0.01 * depth, draw: 0, loss: 0.01 * depth };
   }
   if (winner === 'O') {
-    return { win: 0, draw: 0, loss: 1 };
+    return { win: 0, draw: 0.01 * depth, loss: 1.0 - 0.01 * depth };
   }
   if (winner === 'draw') {
     return { win: 0, draw: 1, loss: 0 };
@@ -172,7 +173,7 @@ function solveOptimal(currentBoard, isUserTurn, mode) {
     for (const idx of emptyIndices) {
       const nextBoard = [...currentBoard];
       nextBoard[idx] = 'X';
-      const probs = solveOptimal(nextBoard, false, mode);
+      const probs = solveOptimal(nextBoard, false, mode, depth + 1);
       
       if (isProbsBetterForUser(probs, bestProbs)) {
         bestProbs = probs;
@@ -190,7 +191,7 @@ function solveOptimal(currentBoard, isUserTurn, mode) {
       for (const idx of emptyIndices) {
         const nextBoard = [...currentBoard];
         nextBoard[idx] = 'O';
-        const probs = solveOptimal(nextBoard, true, mode);
+        const probs = solveOptimal(nextBoard, true, mode, depth + 1);
         
         if (isProbsWorseForUser(probs, worstProbs)) {
           worstProbs = probs;
@@ -208,7 +209,7 @@ function solveOptimal(currentBoard, isUserTurn, mode) {
       for (const idx of emptyIndices) {
         const nextBoard = [...currentBoard];
         nextBoard[idx] = 'O';
-        const probs = solveOptimal(nextBoard, true, mode);
+        const probs = solveOptimal(nextBoard, true, mode, depth + 1);
         sumWin += probs.win;
         sumDraw += probs.draw;
         sumLoss += probs.loss;
@@ -476,7 +477,8 @@ function triggerHint() {
     nextBoard[idx] = 'X';
     
     // Solve with next turn as Bot's turn under optimal user play assumption
-    const probs = solveOptimal(nextBoard, false, botMode);
+    // Set depth to 1 because user has made 1 move (at idx)
+    const probs = solveOptimal(nextBoard, false, botMode, 1);
     
     // Compare lexicographically: first by win probability, then by draw probability
     if (isProbsBetterForUser(probs, bestProbs)) {
